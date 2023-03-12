@@ -1,0 +1,258 @@
+---
+title: "Sucholeiki_Robert_Code"
+author: "Robbie Sucholeiki"
+date: "2023-03-05"
+output: html_document
+---
+
+# Investigating the Covid Response Retrospective Voting
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Load and Mutate Data
+The following code reads in necessary packages and loads ANES data, selecting and cleaning relevant variables. It then mutates a recoded covid_approval score. We then mutate the following variables for use in our regresison analysis: a binary VoteBiden dependent variable and PartyID and gender covariates. 
+```{r}
+# Read packages
+library(tidyverse)
+library(stargazer)
+
+# Load in and clean ANES data---------------------------------------------------
+ANES <- read_dta("C:/Users/mysti/Desktop/SSI_II/ANES_2020/anes_timeseries_2020_stata_20220210.dta") %>%  
+# Select variables of interest
+  select(pid3 = V201228,
+         pid_strong = V201229, 
+         pid_lean = V201230,
+         pid7 = V201231x,
+         # covid approval
+         covid_approval = V201144x,
+         # candidate evaluations
+         bidenft = V201151,
+         trumpft = V201152,
+         # vote choice
+         votepres = V202110x,
+         # Covariates
+         age = V201507x,
+         marital = V201508,
+         educ = V201510,
+         educ5 = V201511x,
+         race = V201549x,
+         gender = V201600,
+         income = V201617x,
+         ideology = V201200) %>%
+  # Recode Missing Values as NA
+  mutate(pid3 = ifelse(pid3 %in% c(-9, -8, -4, 0, 5), NA, pid3),
+         pid_strong = ifelse(pid_strong < 0 , NA, pid_strong),
+         pid_lean = ifelse(pid_lean < 0, NA, pid_lean),
+         pid7 = ifelse(pid7 < 0, NA, pid7),
+         covid_approval = ifelse(covid_approval < 0, NA, covid_approval),
+         bidenft = ifelse(bidenft %in% c(-9, -4, 998), NA, bidenft),
+         trumpft = ifelse(trumpft %in% c(-9, -4, 998), NA, trumpft),
+         age = ifelse(age < 0, NA, age),
+         marital = ifelse(marital < 0, NA, marital),
+         educ = ifelse(educ %in% c(-9, -8, 95), NA, educ),
+         educ5 = ifelse(educ5 < 0, NA, educ5),
+         race = ifelse(race < 0, NA, race),
+         gender = ifelse(gender < 0, NA, gender),
+         income = ifelse(income < 0, NA, income),
+         ideology = ifelse(ideology %in% c(-9, -8, 99), NA, ideology))
+
+
+# Mutate a covid_retro score for Trump's covid response-------------------------
+# covid_retro ranges from -1 ("disapprove strongly") to 2 ("approve strongly")
+ANES2 <- ANES %>%
+  # filter party ID and covid_approval
+  filter(pid3 %in% c(1:3),
+         is.na(covid_approval) == FALSE) %>%
+  # mutate covid_retro score
+  mutate(covid_retro = case_when(covid_approval == 1 ~ 1,
+                                 covid_approval == 2 ~ 2/3,
+                                 covid_approval == 3 ~ 1/3,
+                                 covid_approval == 4 ~ 0))
+         
+
+#Examine covid_retro in a table-------------------------------------------------
+table(ANES2$covid_retro)
+
+
+# Filter and mutate additional variables for use in regression
+ANES3 <- ANES2 %>%
+  #filter relavent variables
+  filter(votepres %in% c(1:2), #filter only Biden and Trump votes
+         #filter relavent covariates
+         pid7 %in% c(1:7), 
+         gender %in% c(1:2), 
+         is.na(age) == FALSE, 
+         is.na(income) == FALSE, 
+         is.na(educ5) == FALSE,
+         is.na(income) == FALSE) %>% 
+  #mutate voteBiden, partyID, and create a dummy variable for gender
+  mutate(voteBiden = case_when(votepres == 2 ~ 0, #assign 0 for Trump votes
+                               votepres == 1 ~ 1),#assign 1 for Biden votes
+         partyID = (pid7 - 4) / 3, #mutate party ID from -1 (strong Dem) to 1 (strong Rep)
+         female = ifelse(gender == 2, 1, 0), #dummy variable for gender, 1 = female)
+         education = (educ5 - 3)/2, #mutate education from -1 (< high school) to 1 (graduate school)
+         Democrat = ifelse(pid3 == 1, 1, 0), #dummy variable for Democrat Party ID
+         Republican = ifelse(pid3 == 2, 1, 0),#dummy variable for Republican Party ID
+         Independent = ifelse(pid3 == 3, 1, 0)) #dummy variable for Independent party ID
+  
+
+```
+
+
+## Visualize Data
+The following code filters Biden thermometer scores, then plots Biden thermometer score against covid_retro, stratifying by Party ID.
+```{r}
+scatterplot_stratified <- ANES2 %>%
+   filter(bidenft %in% c(0:100)) %>%
+   mutate(Party = case_when(pid3 == 1 ~ "Democratic",
+                            pid3 == 3 ~ "Independent",
+                            pid3 == 2 ~ "Republican",)) %>%
+   ggplot(aes(x = covid_retro, y = bidenft)) + #plot bidenft vs covid_retro
+   geom_point(size = 2, alpha = .5, shape = 1) + #scatterplot with adjusted parameters
+   geom_smooth(method = "lm", size = 2, color = "red", se = F) + #adjust trendline
+   scale_x_continuous(breaks = c(0, 1/3, 2/3, 1), 
+                      labels = c("0", "1/3", "2/3", "1")) + #custom x axis breaks
+   facet_wrap(~ Party, ncol = 3) + #facet_rap to show patterns by party id
+   labs(x = "Trump COVID-19 Response Approval (Low <-> High) \n 
+            0 = Strong Disapproval | 1/3 = Weak Disapproval | 2/3 = Weak Approval | 1 = Strong Approval", #apply custom axes labels
+       y = "Feeling Thermometer Toward Biden", 
+       title = "Feeling Thermometer Toward Biden vs Trump COVID-19 Response Approval") +
+  guides(x =  guide_axis(angle = 0)) +
+  theme_bw()
+
+scatterplot_stratified
+```
+The following code filters Biden thermometer scores, then plots Biden thermometer score against covid_retro and applies a regression line by party ID
+````{r}
+scatterplot <- ANES3 %>%
+  filter(bidenft %in% c(0:100)) %>%
+  mutate(Party = case_when(pid3 == 1 ~ "Democratic",
+                           pid3 == 3 ~ "Independent",
+                           pid3 == 2 ~ "Republican")) %>%
+  ggplot(aes(x = covid_retro, y = bidenft, color = Party)) + #plot bidenft vs covid approval
+  geom_jitter(alpha = .75, shape = 1) + #jitter scatterplot with adjusted parameters
+  geom_smooth(method = "lm", size = 2, se = F) + #adjust trendline
+  scale_x_continuous(breaks = c(0, 1/3, 2/3, 1), #custom x axis breaks
+      labels = c("Disapprove Strongly", 
+                 "Disapprove Weakly", 
+                 "Approve Weakly",
+                 "Approve Strongly")) +
+  labs(x = "Trump COVID-19 Response Approval (Low <-> High)", #apply custom axes labels
+       y = "Feeling Thermometer Toward Biden", 
+       title = "Feeling Thermometer Toward Biden vs Trump COVID-19 Response Approval") +
+  theme_bw() + 
+  scale_color_manual(values = c("#276DC2", "grey", "firebrick2"))
+
+scatterplot
+
+```
+The following code produces a histogram of Trump Covid Response Approval Ratings
+```{r}
+histogram_covid <- ANES2 %>%
+  mutate(Party = case_when(pid3 == 1 ~ "Democratic",
+                           pid3 == 3 ~ "Independent",
+                           pid3 == 2 ~ "Republican")) %>%
+  mutate(covid_scale = 4 - covid_approval) %>%
+  ggplot(aes(x = covid_scale, fill = Party)) + #histogram of variable covid_retro
+  geom_histogram(binwidth = 0.5) + #adjust color and binwidth
+  scale_x_continuous(breaks = c(0, 1, 2, 3), #apply custom x axis breaks
+                     labels = c("Disapprove Strongly", 
+                                "Disapprove Weakly", 
+                                "Approve Weakly", 
+                                "Approve Strongly")) +
+  labs(x = "Trump COVID-19 Response Approval (Low <-> High)", #apply custom axes labels
+       y = "Number of Respondents", 
+       title = "Histogram of Trump COVID-19 Response Approval in ANES 2020") +
+  theme_bw() + 
+  scale_fill_manual(values = c("#276DC2", "grey", "firebrick2"))
+
+histogram_covid
+```
+The following code produces a histogram of vote choice for Biden and Trump
+```{r}
+histogram_vote <- ANES2 %>%
+  filter(votepres %in% c(1:2)) %>% #filter only Biden and Trump votes)
+  mutate(Party = case_when(pid3 == 1 ~ "Democratic",
+                           pid3 == 3 ~ "Independent",
+                           pid3 == 2 ~ "Republican")) %>%
+  mutate(voteBiden = case_when(votepres == 2 ~ 0, #assign 0 for Trump votes
+                               votepres == 1 ~ 1)) %>% #assign 1 for Biden votes
+  ggplot(aes(x = voteBiden, fill = Party)) + #histogram of variable covid_retro
+  geom_histogram(binwidth = 0.5) + #adjust color and binwidth
+  scale_x_continuous(breaks = c(0,1), #apply custom x axis breaks
+                     labels = c("Voted for Trump", 
+                                "Voted for Biden")) +
+  labs(x = "Reported Vote", #apply custom axes labels
+       y = "Number of Respondents", 
+       title = "Histogram of Votes for Biden and Trump in ANES 2020") +
+  theme_bw() + 
+  scale_fill_manual(values = c("#276DC2", "grey", "firebrick2"))
+
+histogram_vote
+```
+
+
+
+## Linear Probability Models
+
+Run a linear probability model with covid_retro as the explanatory variable and voteBiden as the dependent variable
+```{r}
+lpm1 <- lm(voteBiden ~ covid_retro, data = ANES3)
+summary(lpm1)  
+```
+
+Run a linear probability model with party ID as a control variable
+```{r}
+lpm2 <- lm(voteBiden ~ covid_retro + partyID, data = ANES3)
+summary(lpm2)  
+```
+Run a linear probablility model with all control variables
+```{r}
+lpm3 <- lm(voteBiden ~ covid_retro + partyID + age + gender + education + income, data = ANES3)
+summary(lpm3)  
+```
+Run a linear probablility model with interaction terms for party ID
+```{r}
+lpm4 <- lm(voteBiden ~ covid_retro * Democrat + covid_retro * Republican, data = ANES3)
+summary(lpm4)  
+```
+
+Run a linear probability model with interaction terms for party ID and control variables
+```{r}
+lpm5 <- lm(voteBiden ~ covid_retro * Democrat + covid_retro * Republican + age + gender + education + income, data = ANES3)
+summary(lpm5)  
+```
+
+
+```{r}
+stargazer(lpm1, lpm2, lpm3,
+          type = "text", 
+          omit.stat = c("adj.rsq", "f", "ser"),
+          title = "Figure 1: Trump COVID-19 Response Approval And Vote Choice in the 2020 Election",
+          dep.var.labels = c("Vote Choice Toward Biden"),
+          covariate.labels = c("Trump COVID-19 Response Approval",
+                                "Party ID (-1 Dem; 0 Ind; 1 Rep)",
+                                "Age", "Gender", "Education Level", "Income"),
+          out = "C:/Users/mysti/Desktop/SSI_II/Final_Assignment/lm_reg_table.html")
+```
+
+```{r}
+stargazer(lpm4, lpm5,
+          type = "text", 
+          omit.stat = c("adj.rsq", "f", "ser"),
+          title = "Figure 2: Vote Choice in the 2020 Election: Trump COVID-19 Response Approval 
+          and Interactions with PartyID",
+          dep.var.labels = c("Vote Choice Toward Biden"),
+          covariate.labels = c("Trump COVID-19 Response Approval",
+                                "Democrat", "Republican",
+                                "Age", "Gender", "Education Level", "Income", 
+                                 "Democrat COVID-19 Interaction",
+                                 "Republican COVID-19 Interaction"),
+          out = "C:/Users/mysti/Desktop/SSI_II/Final_Assignment/lm_interaction_reg_table.html")
+
+```
+
+
